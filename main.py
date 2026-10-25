@@ -1,38 +1,25 @@
-import logging
-import sys
-import time
-import aiogram
 import asyncio
+import logging
 
-from config import TOKEN
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart
-from aiogram.types import Message
-import handlers
-import keyboards
+from aiogram.fsm.storage.memory import SimpleEventIsolation
 
-bot = Bot(token=TOKEN)
-dp = Dispatcher(bot=bot)
-
-
-@dp.message(CommandStart())
-async def command_start_handler(message: Message) -> None:
-    user_id = message.from_user.id
-    user_name = message.from_user.full_name
-    logging.info(f'{user_id=} {user_name=} {time.asctime()}')
-    await message.answer(f"Hello, {user_name}!", reply_markup=keyboards.startMenu)
+from config import load_settings
+from handlers import create_router
+from storage import Inventory
 
 
 async def main():
-    # Initialize Bot instance with default bot properties which will be passed to all API calls
-    bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp.include_router(handlers.router)
-    # And the run events dispatching
-    await dp.start_polling(bot)
+    settings = load_settings()
+    inventory = Inventory(settings.database_path)
+    dispatcher = Dispatcher(events_isolation=SimpleEventIsolation())
+    dispatcher.include_router(create_router(inventory, settings.family_ids))
+    async with Bot(settings.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML)) as bot:
+        await dispatcher.start_polling(bot, close_bot_session=False)
 
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
     asyncio.run(main())
