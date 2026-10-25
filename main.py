@@ -20,6 +20,10 @@ async def main():
     dispatcher = Dispatcher(events_isolation=SimpleEventIsolation())
     dispatcher.include_router(create_router(inventory, settings.family_ids, notifier))
     async with Bot(settings.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML)) as bot:
+        await bot.set_my_name(name='Поиск инструмента')
+        await bot.set_my_name(name='Поиск инструмента', language_code='ru')
+        await bot.set_my_description(description='Каталог инструментов: у кого они находятся и где лежат. Поиск, локации и история перемещений.')
+        await bot.set_my_short_description(short_description='Поиск инструмента: у кого и где он лежит.')
         delivery = asyncio.create_task(notifier.run(bot))
         try:
             await dispatcher.start_polling(bot, close_bot_session=False)

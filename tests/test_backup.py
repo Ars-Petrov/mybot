@@ -19,6 +19,7 @@ class BackupTests(unittest.TestCase):
                 writer.execute('PRAGMA journal_mode=WAL')
                 db.register(1, 'Арсений')
                 db.register(2, 'Иван')
+                custom_place = db.add_location('Склад')
                 tool = db.add('Перфоратор', 'Синий', 'Гараж', 'photo-id', 1)
                 db.move(tool, 0, 1, 'take')
                 db.move(tool, 1, 2, 'take')
@@ -33,6 +34,7 @@ class BackupTests(unittest.TestCase):
                 self.assertEqual(len(restored.pending_notifications()), 1)
                 self.assertIsNone(restored.get(deleted))
                 self.assertEqual(restored.history(deleted)[0]['action'], 'Удалён')
+                self.assertEqual(restored.get_location(custom_place['id'])['name'], 'Склад')
 
     def test_manifest_hashes_and_rotation_preserve_unrelated_files(self):
         with tempfile.TemporaryDirectory() as directory:

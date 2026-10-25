@@ -19,6 +19,7 @@ class Form(StatesGroup):
     photo = State()
     search = State()
     location = State()
+    location_name = State()
 
 
 class FamilyAccess(BaseMiddleware):
@@ -43,15 +44,15 @@ class FamilyAccess(BaseMiddleware):
             if payload.startswith('join_'):
                 joined = self.inventory.join(payload[5:], user.id, user.full_name)
                 if not joined and user.id not in self.inventory.allowed_ids():
-                    await message.answer('Приглашение недействительно. Попросите новую ссылку у семьи.')
+                    await message.answer('Приглашение недействительно. Попросите новую ссылку у участника.')
                     return
         if user.id not in self.inventory.allowed_ids():
             if isinstance(event, CallbackQuery):
-                await event.answer('Нет доступа к семейному каталогу.', show_alert=True)
+                await event.answer('Нет доступа к каталогу.', show_alert=True)
             else:
                 await message.answer(
-                    f'Каталог доступен только семье. Ваш ID: <code>{user.id}</code>.\n'
-                    'Откройте пригласительную ссылку от родственника и нажмите Start.')
+                    f'Каталог доступен по приглашению. Ваш ID: <code>{user.id}</code>.\n'
+                    'Откройте пригласительную ссылку и нажмите Start.')
             return
         self.inventory.register(user.id, user.full_name)
         return await handler(event, data)
@@ -72,7 +73,7 @@ def create_router(inventory, family_ids, notifier=None):
         body = (
             f"<b>{escape(tool['name'])}</b> · №{tool['id']}\n"
             f"{escape(tool['description'])}\n\n"
-            f"🙋 Сейчас у: {escape(tool['holder_name'] or 'никого — в месте хранения')}\n"
+            f"🙋 Сейчас у: {escape(tool['holder_name'] or 'никого — лежит в локации')}\n"
             f"📍 Где лежит: {escape(tool['location'])}\n"
             f"📦 Место возврата: {escape(tool['home'])}"
         )
@@ -102,22 +103,61 @@ def create_router(inventory, family_ids, notifier=None):
             rows.append(nav)
         await message.answer(f'<b>{title}</b> · {total} · страница {page + 1}', reply_markup=kb.inline(rows))
 
+    async def show_locations(message, purpose='browse', tool_id=0, version=0, page=0):
+        places, total = inventory.locations(page=page)
+        rows = [[(place['name'][:60], f"loc:{purpose}:{tool_id}:{version}:{place['id']}")] for place in places]
+        nav = []
+        if page:
+            nav.append(('← Назад', f'places:{purpose}:{tool_id}:{version}:{page - 1}'))
+        if (page + 1) * 8 < total:
+            nav.append(('Далее →', f'places:{purpose}:{tool_id}:{version}:{page + 1}'))
+        if nav:
+            rows.append(nav)
+        rows.append([('➕ Добавить локацию', f'newplace:{purpose}:{tool_id}:{version}')])
+        if purpose == 'put':
+            rows.append([('Отмена', f'tool:{tool_id}')])
+        title = {'browse': 'Локации', 'home': 'Где хранится инструмент?', 'put': 'Куда положить инструмент?'}[purpose]
+        await message.answer(f'<b>{title}</b> · страница {page + 1}', reply_markup=kb.inline(rows))
+
+    async def show_location_tools(message, place_id, page=0):
+        place = inventory.get_location(place_id)
+        if place is None:
+            await message.answer('Локация не найдена.')
+            return
+        tools, total = inventory.listing(location_id=place_id, page=page)
+        rows = [[(f"{tool['name']} · {tool['holder_name'] or 'в локации'}"[:60], f"tool:{tool['id']}")]
+                for tool in tools]
+        nav = []
+        if page:
+            nav.append(('← Назад', f'loctools:{place_id}:{page - 1}'))
+        if (page + 1) * 8 < total:
+            nav.append(('Далее →', f'loctools:{place_id}:{page + 1}'))
+        if nav:
+            rows.append(nav)
+        rows.append([('← Локации', 'places:browse:0:0:0')])
+        await message.answer(f"📍 <b>{escape(place['name'])}</b> · инструментов: {total}", reply_markup=kb.inline(rows))
+
+    async def select_home(message, state, place_id):
+        await state.update_data(home=place_id)
+        await state.set_state(Form.photo)
+        await message.answer('Пришлите одно фото или «-», чтобы сохранить без фото.')
+
     @router.message(Command('start', 'menu', 'cancel'))
     @router.message(F.text.in_({kb.CANCEL, 'Меню', '◀️ Выйти в меню'}))
     async def menu(message: Message, state: FSMContext):
         await state.clear()
-        await message.answer('🧰 Семейные инструменты. Выберите действие.', reply_markup=kb.menu)
+        await message.answer('🧰 Поиск инструмента. Выберите действие.', reply_markup=kb.menu)
 
     @router.message(Command('invite', 'newinvite'))
-    @router.message(F.text == kb.INVITE)
+    @router.message(F.text.in_({kb.INVITE, '👨‍👩‍👧‍👦 Пригласить семью'}))
     async def invite(message: Message, state: FSMContext):
         await state.clear()
         bot_user = await message.bot.get_me()
         rotate = (message.text or '').split('@')[0] == '/newinvite'
         token = inventory.invite_token(rotate=rotate)
         await message.answer(
-            'Отправьте ссылку родственникам. После открытия и нажатия Start '
-            'бот сам добавит их в семью:\n\n'
+            'Отправьте ссылку новому участнику. После открытия и нажатия Start '
+            'бот сам предоставит ему доступ:\n\n'
             f'https://t.me/{bot_user.username}?start=join_{token}\n\n'
             'Любой, у кого есть эта ссылка, сможет войти. '
             '/newinvite — заменить ссылку; уже вступившие сохранят доступ.',
@@ -148,6 +188,20 @@ def create_router(inventory, family_ids, notifier=None):
         await state.set_state(Form.search)
         await message.answer('Введите название или часть описания.', reply_markup=kb.cancel)
 
+    @router.message(F.text == kb.LOCATIONS)
+    @router.message(Command('locations'))
+    async def locations(message: Message, state: FSMContext):
+        await state.clear()
+        await message.answer('📍 Выберите локацию, чтобы посмотреть инструменты.', reply_markup=kb.menu)
+        await show_locations(message)
+
+    @router.message(F.text == kb.ADD_LOCATION)
+    async def add_location(message: Message, state: FSMContext):
+        await state.clear()
+        await state.set_state(Form.location_name)
+        await state.update_data(place_purpose='browse')
+        await message.answer('Название новой локации? Например: «Дом», «Дача», «Мастерская». До 120 символов.', reply_markup=kb.cancel)
+
     # Menu handlers above deliberately let the user leave any input flow.
     @router.message(Form.name)
     async def name(message: Message, state: FSMContext):
@@ -167,7 +221,8 @@ def create_router(inventory, family_ids, notifier=None):
             return
         await state.update_data(description='' if value == '-' else value)
         await state.set_state(Form.home)
-        await message.answer('Где обычно хранится инструмент? Например: «Гараж, второй ящик». До 120 символов.')
+        await message.answer('Выберите место хранения из списка или введите новое название.')
+        await show_locations(message, 'home')
 
     @router.message(Form.home)
     async def home(message: Message, state: FSMContext):
@@ -175,9 +230,32 @@ def create_router(inventory, family_ids, notifier=None):
         if not 1 <= len(value) <= 120:
             await message.answer('Введите место текстом, от 1 до 120 символов.')
             return
-        await state.update_data(home=value)
-        await state.set_state(Form.photo)
-        await message.answer('Пришлите одно фото или «-», чтобы сохранить без фото.')
+        place = inventory.add_location(value)
+        await select_home(message, state, place['id'])
+
+    @router.message(Form.location_name)
+    async def location_name(message: Message, state: FSMContext):
+        value = ' '.join((message.text or '').split())
+        if not 1 <= len(value) <= 120:
+            await message.answer('Введите название локации текстом, от 1 до 120 символов.')
+            return
+        data = await state.get_data()
+        place = inventory.add_location(value)
+        purpose = data.get('place_purpose', 'browse')
+        if purpose == 'home':
+            await select_home(message, state, place['id'])
+        elif purpose == 'put':
+            try:
+                inventory.move(data['tool_id'], data['version'], message.from_user.id, 'put', location_id=place['id'])
+                await message.answer(f"Инструмент положен в «{escape(place['name'])}».", reply_markup=kb.menu)
+            except Conflict as error:
+                await message.answer(f'Локация сохранена. {error}', reply_markup=kb.menu)
+            await state.clear()
+            await show_card(message, data['tool_id'], message.from_user.id)
+        else:
+            await state.clear()
+            await message.answer(f"📍 Локация «{escape(place['name'])}» доступна всем участникам.", reply_markup=kb.menu)
+            await show_location_tools(message, place['id'])
 
     @router.message(Form.photo)
     async def photo(message: Message, state: FSMContext):
@@ -223,6 +301,62 @@ def create_router(inventory, family_ids, notifier=None):
         action = parts[0]
         user_id = call.from_user.id
         try:
+            if action == 'loctools' and len(parts) == 3:
+                place_id, page = int(parts[1]), int(parts[2])
+                if page < 0:
+                    raise ValueError
+                await state.clear()
+                await call.answer()
+                await show_location_tools(call.message, place_id, page)
+                return
+            if action in {'places', 'loc', 'newplace'}:
+                if len(parts) != (4 if action == 'newplace' else 5):
+                    raise ValueError
+                purpose, tool_id, version = parts[1], int(parts[2]), int(parts[3])
+                if purpose not in {'browse', 'home', 'put'}:
+                    raise ValueError
+                if purpose == 'home' and await state.get_state() != Form.home.state:
+                    raise Conflict('Выбор места устарел. Начните добавление инструмента заново.')
+                if purpose == 'put':
+                    tool = inventory.get(tool_id)
+                    if not tool or tool['version'] != version:
+                        raise Conflict('Карточка устарела. Откройте инструмент ещё раз.')
+                    if tool['holder_id'] not in {None, user_id}:
+                        raise Conflict('Сначала возьмите инструмент себе.')
+                if action == 'newplace':
+                    if purpose != 'home':
+                        await state.clear()
+                    await state.update_data(place_purpose=purpose, tool_id=tool_id, version=version)
+                    await state.set_state(Form.location_name)
+                    await call.answer()
+                    await call.message.answer('Как назвать новую локацию? До 120 символов.', reply_markup=kb.cancel)
+                elif action == 'places':
+                    page = int(parts[4])
+                    if page < 0:
+                        raise ValueError
+                    if purpose == 'browse':
+                        await state.clear()
+                    await call.answer()
+                    await show_locations(call.message, purpose, tool_id, version, page)
+                else:
+                    place_id = int(parts[4])
+                    place = inventory.get_location(place_id)
+                    if place is None:
+                        raise Conflict('Локация не найдена.')
+                    if purpose == 'home':
+                        await call.answer()
+                        await select_home(call.message, state, place_id)
+                    elif purpose == 'put':
+                        inventory.move(tool_id, version, user_id, 'put', location_id=place_id)
+                        await state.clear()
+                        await call.answer('Сохранено')
+                        await call.message.answer(f"Инструмент положен в «{escape(place['name'])}».", reply_markup=kb.menu)
+                        await show_card(call.message, tool_id, user_id)
+                    else:
+                        await state.clear()
+                        await call.answer()
+                        await show_location_tools(call.message, place_id)
+                return
             if action == 'list' and len(parts) == 3:
                 mode, page = parts[1], int(parts[2])
                 if mode not in {'all', 'mine', 'search'} or page < 0:
@@ -252,7 +386,7 @@ def create_router(inventory, family_ids, notifier=None):
                             '<b>Последние 10 действий · время UTC</b>\n\n' + '\n\n'.join(lines[offset:offset + 5]),
                             reply_markup=kb.inline([[('← К инструменту', f'tool:{tool_id}')]]))
                 return
-            if action not in {'take', 'return', 'transfer', 'location', 'give', 'delete', 'delete_confirm'} or len(parts) != (4 if action == 'give' else 3):
+            if action not in {'take', 'return', 'transfer', 'location', 'put', 'give', 'delete', 'delete_confirm'} or len(parts) != (4 if action == 'give' else 3):
                 raise ValueError
             tool_id, version = int(parts[1]), int(parts[2])
             tool = inventory.get(tool_id)
@@ -262,7 +396,7 @@ def create_router(inventory, family_ids, notifier=None):
                 await state.clear()
                 await call.answer()
                 await call.message.answer(
-                    f"Удалить «{escape(tool['name'])}» из каталога для всей семьи?",
+                    f"Удалить «{escape(tool['name'])}» из общего каталога?",
                     reply_markup=kb.inline([
                         [('Да, удалить', f'delete_confirm:{tool_id}:{version}')],
                         [('Отмена', f'tool:{tool_id}')],
@@ -274,7 +408,7 @@ def create_router(inventory, family_ids, notifier=None):
                 await call.answer('Удалено')
                 await call.message.answer('Инструмент удалён из каталога.', reply_markup=kb.menu)
                 return
-            if action in {'transfer', 'location'}:
+            if action in {'transfer', 'location', 'put'}:
                 if tool['holder_id'] is not None and tool['holder_id'] != user_id:
                     raise Conflict('Изменить инструмент может тот, у кого он сейчас находится.')
                 await state.clear()
@@ -283,11 +417,14 @@ def create_router(inventory, family_ids, notifier=None):
                         raise Conflict('Сначала возьмите инструмент себе.')
                     members = [m for m in inventory.members(inventory.allowed_ids()) if m['id'] != user_id]
                     if not members:
-                        raise Conflict('Пока некому передать. Родственник должен запустить бота.')
+                        raise Conflict('Пока некому передать. Другой участник должен запустить бота.')
                     await call.answer()
                     await call.message.answer('Кому передать? Место пока останется прежним.', reply_markup=kb.inline(
                         [[(m['name'][:60], f"give:{tool_id}:{version}:{m['id']}")] for m in members]
                         + [[('Отмена', f'tool:{tool_id}')]]))
+                elif action == 'put':
+                    await call.answer()
+                    await show_locations(call.message, 'put', tool_id, version)
                 else:
                     await state.set_state(Form.location)
                     await state.update_data(tool_id=tool_id, version=version)
@@ -296,7 +433,7 @@ def create_router(inventory, family_ids, notifier=None):
                 return
             target = int(parts[3]) if action == 'give' else None
             if action == 'give' and target not in inventory.allowed_ids():
-                raise Conflict('Получатель не входит в семейный список.')
+                raise Conflict('Получатель не входит в список участников.')
             inventory.move(tool_id, version, user_id, 'transfer' if action == 'give' else action, holder_id=target)
             notifier.wake.set()
             await state.clear()

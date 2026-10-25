@@ -5,12 +5,15 @@ MINE = '🙋 Мои инструменты'
 ADD = '➕ Добавить инструмент'
 SEARCH = '🔍 Найти инструмент'
 HELP = '❓ Помощь'
-INVITE = '👨‍👩‍👧‍👦 Пригласить семью'
+INVITE = '🔗 Пригласить участника'
+LOCATIONS = '📍 Локации'
+ADD_LOCATION = '➕ Добавить локацию'
 CANCEL = 'Отмена'
 
 menu = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text=CATALOG), KeyboardButton(text=MINE)],
     [KeyboardButton(text=ADD), KeyboardButton(text=SEARCH)],
+    [KeyboardButton(text=LOCATIONS), KeyboardButton(text=ADD_LOCATION)],
     [KeyboardButton(text=INVITE), KeyboardButton(text=HELP)],
 ], resize_keyboard=True)
 cancel = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=CANCEL)]], resize_keyboard=True)
@@ -31,7 +34,7 @@ def card(tool, user_id):
     elif tool['holder_id'] == user_id:
         rows.append([('🤝 Передать', f'transfer:{prefix}'), ('📦 Вернуть', f'return:{prefix}')])
     if tool['holder_id'] is None or tool['holder_id'] == user_id:
-        rows.append([('📍 Изменить место', f'location:{prefix}')])
+        rows.append([('📍 Положить в локацию', f'put:{prefix}')])
     rows.append([('📜 История', f"history:{tool['id']}")])
     rows.append([('🗑 Удалить инструмент', f'delete:{prefix}')])
     rows.append([('🔄 Обновить', f"tool:{tool['id']}")])

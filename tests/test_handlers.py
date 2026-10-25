@@ -215,6 +215,75 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         await self.send('/start', user_id=3)
         self.assertIn('Выберите действие', self.session.sent[-1].text)
 
+    async def test_add_tool_by_selecting_existing_location(self):
+        for value in [kb.ADD, 'Пила', '-']:
+            await self.send(value)
+        await self.send(callback='loc:home:0:0:1')
+        await self.send('-')
+        self.assertEqual(self.db.get(1)['home'], 'Дом')
+        self.assertEqual(self.db.get(1)['location'], 'Дом')
+        await self.send(callback='loc:home:0:0:2')
+        self.assertIn('Выбор места устарел', self.output())
+
+    async def test_add_location_during_tool_creation(self):
+        for value in [kb.ADD, 'Пила', '-']:
+            await self.send(value)
+        await self.send(callback='newplace:home:0:0')
+        await self.send('Склад <А>')
+        await self.send('-')
+        tool = self.db.get(1)
+        self.assertEqual(tool['name'], 'Пила')
+        self.assertEqual(tool['home'], 'Склад <А>')
+        self.assertIn('Склад &lt;А&gt;', self.output())
+        self.assertEqual(self.db.locations()[1], 4)
+
+    async def test_all_participants_add_locations_and_put_tool(self):
+        await self.send(kb.ADD_LOCATION, user_id=2)
+        await self.send('Мастерская', user_id=2)
+        place = self.db.add_location('Мастерская')
+        await self.add_tool()
+        await self.send(callback='take:1:0')
+        await self.send(callback='put:1:1')
+        self.assertIn('Куда положить', self.output())
+        await self.send(callback=f"loc:put:1:1:{place['id']}")
+        self.assertIsNone(self.db.get(1)['holder_id'])
+        self.assertEqual(self.db.get(1)['location'], 'Мастерская')
+        await self.send(kb.MINE)
+        self.assertIn('Мои инструменты: пусто', self.session.sent[-1].text)
+        await self.send(kb.LOCATIONS, user_id=2)
+        await self.send(callback=f"loc:browse:0:0:{place['id']}", user_id=2)
+        self.assertIn('инструментов: 1', self.session.sent[-1].text)
+        await self.send(callback='loc:put:1:1:1')
+        self.assertIn('Карточка устарела', self.session.sent[-1].text)
+
+    async def test_new_location_during_put_and_cancel(self):
+        await self.add_tool()
+        await self.send(callback='take:1:0')
+        await self.send(callback='newplace:put:1:1')
+        await self.send('/cancel')
+        self.assertEqual(self.db.get(1)['holder_id'], 1)
+        await self.send(callback='newplace:put:1:1')
+        await self.send('Подвал')
+        self.assertIsNone(self.db.get(1)['holder_id'])
+        self.assertEqual(self.db.get(1)['location'], 'Подвал')
+        self.assertEqual(self.db.get(1)['home'], 'Гараж')
+
+    async def test_location_pagination_access_and_neutral_labels(self):
+        for index in range(10):
+            self.db.add_location(f'Локация {index}')
+        await self.send(kb.LOCATIONS)
+        await self.send(callback='places:browse:0:0:1')
+        self.assertIn('страница 2', self.session.sent[-1].text)
+        await self.send(callback='newplace:browse:0:0', user_id=99)
+        self.assertIn('Нет доступа', self.session.sent[-1].text)
+        await self.send('/start')
+        self.assertIn('Поиск инструмента', self.session.sent[-1].text)
+        await self.send('/help')
+        await self.send(kb.INVITE)
+        bodies = self.output().casefold()
+        for word in ['семей', 'семь', 'родствен']:
+            self.assertNotIn(word, bodies)
+
 
 if __name__ == '__main__':
     unittest.main()

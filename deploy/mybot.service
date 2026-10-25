@@ -1,5 +1,5 @@
 [Unit]
-Description=Family tools Telegram bot
+Description=Tool search Telegram bot
 Wants=network-online.target
 After=network-online.target
 

@@ -95,6 +95,58 @@ class InventoryTests(unittest.TestCase):
         migrated.delete(self.tool, 0, 2)
         self.assertIsNone(migrated.get(self.tool))
 
+    def test_locations_are_shared_unique_and_paginated(self):
+        self.assertEqual([place['name'] for place in self.db.locations()[0]], ['Дом', 'Дача', 'Гараж'])
+        first = self.db.add_location(' Мастерская   у  дома ')
+        duplicate = self.db.add_location('мастерская у дома')
+        self.assertEqual(first['id'], duplicate['id'])
+        self.assertEqual(first['name'], 'Мастерская у дома')
+        for index in range(10):
+            self.db.add_location(f'Место {index}')
+        self.assertEqual(len(self.db.locations()[0]), 8)
+        self.assertEqual(self.db.locations(page=1)[1], 14)
+        for name in ['', '   ', 'a' * 121]:
+            with self.assertRaises(ValueError):
+                self.db.add_location(name)
+
+    def test_put_releases_holder_filters_location_and_preserves_home(self):
+        place = self.db.add_location('Мастерская')
+        self.db.move(self.tool, 0, 1, 'take')
+        self.db.move(self.tool, 1, 1, 'put', location_id=place['id'])
+        tool = self.db.get(self.tool)
+        self.assertIsNone(tool['holder_id'])
+        self.assertEqual(tool['location'], 'Мастерская')
+        self.assertEqual(tool['home'], 'Гараж')
+        self.assertEqual(self.db.listing(holder_id=1)[1], 0)
+        self.assertEqual(self.db.listing(location_id=place['id'])[1], 1)
+        self.assertEqual(self.db.history(self.tool)[0]['action'], 'Положен в локацию')
+        self.db.move(self.tool, 2, 2, 'take')
+        self.db.move(self.tool, 3, 2, 'return')
+        self.assertEqual(self.db.listing(location_id=place['id'])[1], 0)
+        self.assertEqual(self.db.get(self.tool)['location'], 'Гараж')
+
+    def test_put_rejects_other_holder_invalid_place_and_stale_card(self):
+        self.db.move(self.tool, 0, 1, 'take')
+        for actor, version, place in [(2, 1, 1), (1, 0, 1), (1, 1, 999)]:
+            with self.assertRaises(Conflict):
+                self.db.move(self.tool, version, actor, 'put', location_id=place)
+        self.assertEqual(self.db.get(self.tool)['version'], 1)
+        self.assertEqual(self.db.get(self.tool)['holder_id'], 1)
+
+    def test_legacy_location_migration_preserves_text_and_history(self):
+        old_tool = self.db.add('Пила', '', 'Кладовка, полка №2', None, 1)
+        self.db.move(old_tool, 0, 1, 'location', location='Лоджия')
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute('DROP TABLE locations')
+        migrated = Inventory(self.path)
+        names = {row['name'] for row in migrated.locations(page_size=100)[0]}
+        self.assertTrue({'Кладовка, полка №2', 'Лоджия'} <= names)
+        self.assertEqual(migrated.get(old_tool)['home'], 'Кладовка, полка №2')
+        self.assertEqual(migrated.get(old_tool)['location'], 'Лоджия')
+        self.assertEqual(len(migrated.history(old_tool)), 2)
+        count = migrated.locations()[1]
+        self.assertEqual(Inventory(self.path).locations()[1], count)
+
 
 if __name__ == '__main__':
     unittest.main()

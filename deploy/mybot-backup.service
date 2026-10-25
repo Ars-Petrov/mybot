@@ -1,5 +1,5 @@
 [Unit]
-Description=Consistent family tools SQLite backup
+Description=Consistent tool inventory SQLite backup
 
 [Service]
 Type=oneshot

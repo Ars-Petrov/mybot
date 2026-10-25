@@ -1,4 +1,4 @@
-"""One shared family inventory, persisted in SQLite. No ownership concept."""
+"""Shared tool inventory, persisted in SQLite. No ownership concept."""
 import sqlite3
 import time
 import secrets
@@ -47,11 +47,22 @@ class Inventory:
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY, value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS locations (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    name_key TEXT NOT NULL UNIQUE
+                );
             """)
             # Migrate databases created by the first version without losing inventory.
             db.execute('BEGIN IMMEDIATE')
             if 'deleted_at' not in {row['name'] for row in db.execute('PRAGMA table_info(tools)')}:
                 db.execute('ALTER TABLE tools ADD COLUMN deleted_at TEXT')
+            for name in ('Дом', 'Дача', 'Гараж'):
+                self._ensure_location(db, name)
+            # Preserve existing text and history; import legacy places into the picker.
+            for row in db.execute('SELECT home, location FROM tools').fetchall():
+                self._ensure_location(db, row['home'])
+                self._ensure_location(db, row['location'])
 
     @contextmanager
     def connect(self):
@@ -106,8 +117,38 @@ class Inventory:
                        (user_id, name))
             return True
 
+    @staticmethod
+    def _ensure_location(db, name):
+        name = ' '.join(name.split())
+        if not 1 <= len(name) <= 120:
+            raise ValueError('Название локации должно содержать от 1 до 120 символов.')
+        key = name.casefold()
+        db.execute('INSERT OR IGNORE INTO locations(name,name_key) VALUES (?,?)', (name, key))
+        return db.execute('SELECT * FROM locations WHERE name_key=?', (key,)).fetchone()
+
+    def add_location(self, name):
+        with self.connect() as db:
+            return dict(self._ensure_location(db, name))
+
+    def get_location(self, location_id):
+        with self.connect() as db:
+            row = db.execute('SELECT * FROM locations WHERE id=?', (location_id,)).fetchone()
+            return dict(row) if row else None
+
+    def locations(self, page=0, page_size=8):
+        with self.connect() as db:
+            rows = [dict(row) for row in db.execute('SELECT * FROM locations ORDER BY id')]
+            return rows[page * page_size:(page + 1) * page_size], len(rows)
+
     def add(self, name, description, home, photo, actor_id):
         with self.connect() as db:
+            if isinstance(home, int):
+                place = db.execute('SELECT * FROM locations WHERE id=?', (home,)).fetchone()
+                if place is None:
+                    raise ValueError('Локация не найдена.')
+            else:
+                place = self._ensure_location(db, home)
+            home = place['name']
             tool_id = db.execute(
                 "INSERT INTO tools(name, description, home, location, photo) VALUES (?, ?, ?, ?, ?)",
                 (name, description, home, home, photo)).lastrowid
@@ -122,16 +163,21 @@ class Inventory:
                              (tool_id,)).fetchone()
             return dict(row) if row and (include_deleted or row['deleted_at'] is None) else None
 
-    def listing(self, holder_id=None, query='', page=0, page_size=8):
+    def listing(self, holder_id=None, query='', page=0, page_size=8, location_id=None):
         with self.connect() as db:
             # Python casefold also supports Cyrillic, unlike SQLite's default LIKE.
             rows = [dict(row) for row in db.execute("""SELECT t.*, m.name AS holder_name FROM tools t
                     LEFT JOIN members m ON m.id=t.holder_id WHERE t.deleted_at IS NULL ORDER BY t.id DESC""")]
         rows = [row for row in rows if (holder_id is None or row['holder_id'] == holder_id)
                 and query.casefold() in (row['name'] + ' ' + row['description']).casefold()]
+        if location_id is not None:
+            place = self.get_location(location_id)
+            if place is None:
+                return [], 0
+            rows = [row for row in rows if ' '.join(row['location'].split()).casefold() == place['name_key']]
         return rows[page * page_size:(page + 1) * page_size], len(rows)
 
-    def move(self, tool_id, version, actor_id, action, holder_id=None, location=None):
+    def move(self, tool_id, version, actor_id, action, holder_id=None, location=None, location_id=None):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT * FROM tools WHERE id=?', (tool_id,)).fetchone()
@@ -150,7 +196,12 @@ class Inventory:
             else:
                 if row['holder_id'] is not None and row['holder_id'] != actor_id:
                     raise Conflict('Изменить инструмент может тот, у кого он сейчас находится.')
-                if action == 'return':
+                if action == 'put':
+                    place = db.execute('SELECT * FROM locations WHERE id=?', (location_id,)).fetchone()
+                    if place is None:
+                        raise Conflict('Локация не найдена. Выберите её заново.')
+                    holder_id, location, label = None, place['name'], 'Положен в локацию'
+                elif action == 'return':
                     if row['holder_id'] != actor_id:
                         raise Conflict('Инструмент уже в месте хранения.')
                     holder_id, location, label = None, row['home'], 'Возвращён'
@@ -163,6 +214,7 @@ class Inventory:
                 elif action == 'location':
                     if not location or not location.strip() or len(location) > 120:
                         raise ValueError('Место должно содержать от 1 до 120 символов.')
+                    location = self._ensure_location(db, location)['name']
                     holder_id, label = row['holder_id'], 'Изменено место'
                 else:
                     raise ValueError('Unknown movement')
@@ -172,7 +224,7 @@ class Inventory:
                        (tool_id, actor_id, label, holder_id, location))
 
     def delete(self, tool_id, version, actor_id):
-        """Any family member may delete; keep a tombstone and history for recovery."""
+        """Any participant may delete; keep a tombstone and history for recovery."""
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT * FROM tools WHERE id=?', (tool_id,)).fetchone()
