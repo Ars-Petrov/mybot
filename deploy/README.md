@@ -38,9 +38,15 @@ sudo cp /srv/mybot/deploy/mybot-backup.service /etc/systemd/system/
 sudo cp /srv/mybot/deploy/mybot-backup.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now mybot.service
+sudo systemctl status mybot.service
+```
+
+Дождитесь ответа бота на `/id` в Telegram: при первом запуске это также подтверждает,
+что файл базы уже создан. Затем создайте первый бэкап и включите расписание:
+
+```bash
 sudo systemctl start mybot-backup.service
 sudo systemctl enable --now mybot-backup.timer
-sudo systemctl status mybot.service
 sudo systemctl list-timers mybot-backup.timer
 ```
 
