@@ -24,6 +24,8 @@ class TelegramStub(BaseSession):
 
     async def make_request(self, bot, method, timeout=None):
         self.sent.append(method)
+        if method.__api_method__ == 'getMe':
+            return User(id=123456, is_bot=True, first_name='Tools', username='whereIsMyToolsBot')
         if method.__api_method__ == 'answerCallbackQuery':
             return True
         return Message(message_id=len(self.sent), date=datetime.now(timezone.utc),
@@ -167,6 +169,51 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         for value in [kb.ADD, 'Молоток', '-', 'Дача', '-']:
             await self.send(value, user_id=2)
         self.assertEqual(self.db.listing()[1], 1)
+
+    async def test_invite_join_registers_automatically_and_can_receive_tools(self):
+        await self.send('/invite')
+        invite = self.output()
+        self.assertIn('https://t.me/whereIsMyToolsBot?start=join_', invite)
+        token = self.db.invite_token()
+        await self.send('/start join_' + token, user_id=3)
+        self.assertIn(3, self.db.allowed_ids())
+        self.assertEqual(self.db.members({3})[0]['name'], 'Член семьи 3')
+        await self.add_tool()
+        await self.send(callback='take:1:0')
+        await self.send(callback='give:1:1:3')
+        self.assertEqual(self.db.get(1)['holder_id'], 3)
+        await self.send(callback='take:1:2', user_id=2)
+        await self.notifier.deliver(self.bot)
+        self.assertEqual(self.session.sent[-1].chat_id, 3)
+        await self.send(kb.MINE, user_id=3)
+        self.assertIn('Мои инструменты: пусто', self.output())
+
+    async def test_unknown_start_bad_invite_and_group_join_are_denied(self):
+        await self.send('/start', user_id=3)
+        self.assertNotIn(3, self.db.allowed_ids())
+        await self.send('/start join_wrong', user_id=3)
+        self.assertIn('недействительно', self.output())
+        token = self.db.invite_token()
+        await self.send('/start join_' + token, user_id=3, chat_type='group')
+        self.assertNotIn(3, self.db.allowed_ids())
+        await self.send('/invite', user_id=3)
+        self.assertNotIn('https://t.me/', self.session.sent[-1].text)
+        await self.send(callback='take:1:0', user_id=3)
+        self.assertIn('Нет доступа', self.output())
+
+    async def test_rotation_rejects_old_link_preserves_members_and_button_works(self):
+        await self.send(kb.INVITE)
+        token = self.db.invite_token()
+        await self.send('/start join_' + token, user_id=3)
+        await self.send('/newinvite')
+        new_token = self.db.invite_token()
+        self.assertNotEqual(token, new_token)
+        await self.send('/start join_' + token, user_id=4)
+        self.assertNotIn(4, self.db.allowed_ids())
+        await self.send('/start join_' + new_token, user_id=4)
+        self.assertIn(4, self.db.allowed_ids())
+        await self.send('/start', user_id=3)
+        self.assertIn('Выберите действие', self.session.sent[-1].text)
 
 
 if __name__ == '__main__':

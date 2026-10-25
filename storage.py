@@ -1,6 +1,7 @@
 """One shared family inventory, persisted in SQLite. No ownership concept."""
 import sqlite3
 import time
+import secrets
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -40,6 +41,12 @@ class Inventory:
                     next_attempt REAL NOT NULL DEFAULT 0,
                     delivered INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS family_access (
+                    user_id INTEGER PRIMARY KEY
+                );
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY, value TEXT NOT NULL
+                );
             """)
             # Migrate databases created by the first version without losing inventory.
             db.execute('BEGIN IMMEDIATE')
@@ -66,6 +73,38 @@ class Inventory:
         with self.connect() as db:
             return [dict(row) for row in db.execute("SELECT * FROM members ORDER BY name")
                     if row['id'] in allowed_ids]
+
+    def seed_access(self, user_ids):
+        with self.connect() as db:
+            db.executemany('INSERT OR IGNORE INTO family_access(user_id) VALUES (?)',
+                           [(user_id,) for user_id in user_ids])
+
+    def allowed_ids(self):
+        with self.connect() as db:
+            return {row['user_id'] for row in db.execute('SELECT user_id FROM family_access')}
+
+    def invite_token(self, rotate=False):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute("SELECT value FROM settings WHERE key='invite_token'").fetchone()
+            if row is not None and not rotate:
+                return row['value']
+            token = secrets.token_urlsafe(32)
+            db.execute("INSERT INTO settings(key,value) VALUES ('invite_token',?) "
+                       'ON CONFLICT(key) DO UPDATE SET value=excluded.value', (token,))
+            return token
+
+    def join(self, token, user_id, name):
+        """Validate invitation and persist identity/access in one transaction."""
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute("SELECT value FROM settings WHERE key='invite_token'").fetchone()
+            if row is None or not token.isascii() or not secrets.compare_digest(row['value'], token):
+                return False
+            db.execute('INSERT OR IGNORE INTO family_access(user_id) VALUES (?)', (user_id,))
+            db.execute('INSERT INTO members VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name=excluded.name',
+                       (user_id, name))
+            return True
 
     def add(self, name, description, home, photo, actor_id):
         with self.connect() as db:
