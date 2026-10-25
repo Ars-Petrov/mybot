@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import sqlite3
+from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -87,7 +88,7 @@ class InventoryTests(unittest.TestCase):
             self.db.delete(self.tool, 2, 2)
 
     def test_migration_from_first_version_keeps_data(self):
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             db.execute('ALTER TABLE tools DROP COLUMN deleted_at')
         migrated = Inventory(self.path)
         self.assertEqual(migrated.get(self.tool)['home'], 'Гараж')

@@ -2,6 +2,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from backup import create_snapshot, sha256, verify
@@ -14,7 +15,7 @@ class BackupTests(unittest.TestCase):
             root = Path(directory)
             db = Inventory(root / 'live.sqlite3')
             # Keep a WAL connection open so committed data is not checkpointed to main file.
-            with sqlite3.connect(db.path) as writer:
+            with closing(sqlite3.connect(db.path)) as writer, writer:
                 writer.execute('PRAGMA journal_mode=WAL')
                 db.register(1, 'Арсений')
                 db.register(2, 'Иван')
@@ -55,7 +56,7 @@ class BackupTests(unittest.TestCase):
             root = Path(directory)
             with self.assertRaises(FileNotFoundError):
                 create_snapshot(root / 'missing.sqlite3', root / 'backups')
-            with sqlite3.connect(root / 'wrong.sqlite3') as db:
+            with closing(sqlite3.connect(root / 'wrong.sqlite3')) as db, db:
                 db.execute('CREATE TABLE unrelated(id INTEGER)')
             with self.assertRaises(ValueError):
                 create_snapshot(root / 'wrong.sqlite3', root / 'backups')

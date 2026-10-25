@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -26,7 +27,7 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
             await Notifier(db, {1, 2}).deliver(bot)
             self.assertEqual(db.get(tool)['holder_id'], 2)
             self.assertEqual(db.pending_notifications(), [])  # Backoff, not deleted.
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection, connection:
                 row = connection.execute('SELECT attempts, delivered FROM notifications').fetchone()
                 self.assertEqual(row, (1, 0))
                 connection.execute('UPDATE notifications SET next_attempt=0')
@@ -34,7 +35,7 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
             reloaded = Inventory(path)
             await Notifier(reloaded, {1, 2}).deliver(bot)
             self.assertEqual(bot.send_message.await_count, 2)
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection, connection:
                 self.assertEqual(connection.execute('SELECT delivered FROM notifications').fetchone()[0], 1)
 
     async def test_removed_family_member_gets_no_notification(self):
