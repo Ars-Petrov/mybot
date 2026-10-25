@@ -1,4 +1,4 @@
-"""Print a family invitation locally, including before anyone has joined."""
+"""Print a participant invitation locally, including before anyone has joined."""
 import argparse
 import asyncio
 

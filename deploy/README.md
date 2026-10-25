@@ -11,7 +11,7 @@
 ```bash
 sudo apt update
 sudo apt install python3 python3-venv git openssh-server
-sudo git clone --branch codex/family-tools https://github.com/Ars-Petrov/mybot /srv/mybot
+sudo git clone --branch codex/tool-locations https://github.com/Ars-Petrov/mybot /srv/mybot
 sudo useradd --system --home-dir /srv/mybot --shell /bin/bash mybot
 sudo chown -R mybot:mybot /srv/mybot
 sudo -u mybot mkdir -p /srv/mybot/data /srv/mybot/backups
@@ -23,10 +23,10 @@ sudo nano /srv/mybot/.env
 ```
 
 Если пользователь или папка уже существуют, используйте их вместо повторного создания.
-После слияния изменений можно клонировать основную ветку вместо `codex/family-tools`.
+После слияния изменений можно клонировать основную ветку вместо `codex/tool-locations`.
 В `.env` заполните `BOT_TOKEN`; `FAMILY_IDS` можно оставить пустым. Оставьте `DATABASE_PATH=data/tools.sqlite3`
 для приложенных служб. Для другой базы исправьте путь и в службе резервного копирования.
-После запуска создайте первую пригласительную ссылку командой ниже. Родственники
+После запуска создайте первую пригласительную ссылку командой ниже. Участники
 регистрируются автоматически по ней, без внесения ID в настройки.
 
 Старую копию бота с тем же токеном остановите. При переносе существующей базы остановите
@@ -49,8 +49,8 @@ cd /srv/mybot
 sudo -u mybot .venv/bin/python manage.py invite
 ```
 
-Откройте полученную ссылку в Telegram и нажмите Start. Затем приглашайте семью
-кнопкой «Пригласить семью» в меню бота. `FAMILY_IDS` нужен только для необязательного
+Откройте полученную ссылку в Telegram и нажмите Start. Затем приглашайте других
+кнопкой «Пригласить участника» в меню бота. `FAMILY_IDS` нужен только для необязательного
 начального импорта: вступившие по ссылке сохраняются в базе и не требуют перезапуска.
 
 Дождитесь ответа бота на `/id` в Telegram: при первом запуске это также подтверждает,
