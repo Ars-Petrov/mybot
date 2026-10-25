@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, Message
 import keyboards as kb
 import text
 from storage import Conflict
+from notifications import Notifier
 
 
 class Form(StatesGroup):
@@ -31,7 +32,8 @@ class FamilyAccess(BaseMiddleware):
             if isinstance(event, CallbackQuery):
                 await event.answer('Откройте личный чат с ботом.', show_alert=True)
             return
-        command = (message.text or '').split(maxsplit=1)[0].split('@')[0] if message.text else ''
+        words = (message.text or '').split(maxsplit=1)
+        command = words[0].split('@')[0] if words else ''
         if isinstance(event, Message) and command == '/id':
             await message.answer(f'Ваш Telegram ID: <code>{user.id}</code>')
             return
@@ -47,7 +49,8 @@ class FamilyAccess(BaseMiddleware):
         return await handler(event, data)
 
 
-def create_router(inventory, family_ids):
+def create_router(inventory, family_ids, notifier=None):
+    notifier = notifier or Notifier(inventory, family_ids)
     router = Router()
     access = FamilyAccess(inventory, family_ids)
     router.message.outer_middleware(access)
@@ -224,12 +227,28 @@ def create_router(inventory, family_ids):
                             '<b>Последние 10 действий · время UTC</b>\n\n' + '\n\n'.join(lines[offset:offset + 5]),
                             reply_markup=kb.inline([[('← К инструменту', f'tool:{tool_id}')]]))
                 return
-            if action not in {'take', 'return', 'transfer', 'location', 'give'} or len(parts) != (4 if action == 'give' else 3):
+            if action not in {'take', 'return', 'transfer', 'location', 'give', 'delete', 'delete_confirm'} or len(parts) != (4 if action == 'give' else 3):
                 raise ValueError
             tool_id, version = int(parts[1]), int(parts[2])
             tool = inventory.get(tool_id)
             if not tool or tool['version'] != version:
                 raise Conflict('Карточка устарела. Откройте инструмент ещё раз.')
+            if action == 'delete':
+                await state.clear()
+                await call.answer()
+                await call.message.answer(
+                    f"Удалить «{escape(tool['name'])}» из каталога для всей семьи?",
+                    reply_markup=kb.inline([
+                        [('Да, удалить', f'delete_confirm:{tool_id}:{version}')],
+                        [('Отмена', f'tool:{tool_id}')],
+                    ]))
+                return
+            if action == 'delete_confirm':
+                inventory.delete(tool_id, version, user_id)
+                await state.clear()
+                await call.answer('Удалено')
+                await call.message.answer('Инструмент удалён из каталога.', reply_markup=kb.menu)
+                return
             if action in {'transfer', 'location'}:
                 if tool['holder_id'] is not None and tool['holder_id'] != user_id:
                     raise Conflict('Изменить инструмент может тот, у кого он сейчас находится.')
@@ -254,6 +273,7 @@ def create_router(inventory, family_ids):
             if action == 'give' and target not in family_ids:
                 raise Conflict('Получатель не входит в семейный список.')
             inventory.move(tool_id, version, user_id, 'transfer' if action == 'give' else action, holder_id=target)
+            notifier.wake.set()
             await state.clear()
             await call.answer('Сохранено')
             await show_card(call.message, tool_id, user_id)

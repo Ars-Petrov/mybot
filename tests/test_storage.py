@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -57,6 +58,41 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual((len(rows), total), (8, 10))
         self.assertEqual(len(self.db.listing(query='ДРЕЛЬ', page=1)[0]), 2)
         self.assertEqual(self.db.listing(query="' OR 1=1 --")[1], 0)
+
+    def test_take_from_relative_creates_persistent_notification(self):
+        self.db.move(self.tool, 0, 1, 'take')
+        self.assertEqual(self.db.pending_notifications(), [])
+        self.db.move(self.tool, 1, 2, 'take')
+        self.assertEqual(self.db.listing(holder_id=1)[1], 0)
+        self.assertEqual(self.db.listing(holder_id=2)[1], 1)
+        pending = Inventory(self.path).pending_notifications()
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]['recipient_id'], 1)
+        self.assertEqual(pending[0]['taker_name'], 'Иван')
+        with self.assertRaises(Conflict):
+            self.db.move(self.tool, 1, 1, 'take')
+        self.assertEqual(len(self.db.pending_notifications()), 1)
+
+    def test_any_member_can_delete_occupied_tool_and_old_buttons_fail(self):
+        self.db.move(self.tool, 0, 1, 'take')
+        self.db.delete(self.tool, 1, 2)
+        self.assertIsNone(self.db.get(self.tool))
+        self.assertIsNotNone(self.db.get(self.tool, include_deleted=True))
+        self.assertEqual(self.db.listing()[1], 0)
+        self.assertEqual(self.db.listing(holder_id=1)[1], 0)
+        self.assertEqual(self.db.history(self.tool)[0]['action'], 'Удалён')
+        with self.assertRaises(Conflict):
+            self.db.move(self.tool, 2, 2, 'take')
+        with self.assertRaises(Conflict):
+            self.db.delete(self.tool, 2, 2)
+
+    def test_migration_from_first_version_keeps_data(self):
+        with sqlite3.connect(self.path) as db:
+            db.execute('ALTER TABLE tools DROP COLUMN deleted_at')
+        migrated = Inventory(self.path)
+        self.assertEqual(migrated.get(self.tool)['home'], 'Гараж')
+        migrated.delete(self.tool, 0, 2)
+        self.assertIsNone(migrated.get(self.tool))
 
 
 if __name__ == '__main__':

@@ -1,0 +1,22 @@
+[Unit]
+Description=Family tools Telegram bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=mybot
+Group=mybot
+WorkingDirectory=/srv/mybot
+ExecStart=/srv/mybot/.venv/bin/python /srv/mybot/main.py
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/mybot/data
+
+[Install]
+WantedBy=multi-user.target
