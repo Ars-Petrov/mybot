@@ -5,12 +5,13 @@ MINE = '🙋 Мои инструменты'
 ADD = '➕ Добавить инструмент'
 SEARCH = '🔍 Найти инструмент'
 HELP = '❓ Помощь'
+INVITE = '👨‍👩‍👧‍👦 Пригласить семью'
 CANCEL = 'Отмена'
 
 menu = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text=CATALOG), KeyboardButton(text=MINE)],
     [KeyboardButton(text=ADD), KeyboardButton(text=SEARCH)],
-    [KeyboardButton(text=HELP)],
+    [KeyboardButton(text=INVITE), KeyboardButton(text=HELP)],
 ], resize_keyboard=True)
 cancel = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=CANCEL)]], resize_keyboard=True)
 

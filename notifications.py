@@ -8,12 +8,13 @@ from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, Telegra
 
 class Notifier:
     def __init__(self, inventory, family_ids):
-        self.inventory, self.family_ids = inventory, family_ids
+        self.inventory = inventory
+        self.inventory.seed_access(family_ids)
         self.wake = asyncio.Event()
 
     async def deliver(self, bot):
         for item in self.inventory.pending_notifications():
-            if item['recipient_id'] not in self.family_ids:
+            if item['recipient_id'] not in self.inventory.allowed_ids():
                 self.inventory.notification_done(item['id'])
                 continue
             try:

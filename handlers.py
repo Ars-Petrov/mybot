@@ -23,7 +23,8 @@ class Form(StatesGroup):
 
 class FamilyAccess(BaseMiddleware):
     def __init__(self, inventory, family_ids):
-        self.inventory, self.family_ids = inventory, family_ids
+        self.inventory = inventory
+        self.inventory.seed_access(family_ids)
 
     async def __call__(self, handler, event, data):
         message = event if isinstance(event, Message) else event.message
@@ -37,13 +38,20 @@ class FamilyAccess(BaseMiddleware):
         if isinstance(event, Message) and command == '/id':
             await message.answer(f'Ваш Telegram ID: <code>{user.id}</code>')
             return
-        if user.id not in self.family_ids:
+        if isinstance(event, Message) and command == '/start' and len(words) == 2:
+            payload = words[1].strip()
+            if payload.startswith('join_'):
+                joined = self.inventory.join(payload[5:], user.id, user.full_name)
+                if not joined and user.id not in self.inventory.allowed_ids():
+                    await message.answer('Приглашение недействительно. Попросите новую ссылку у семьи.')
+                    return
+        if user.id not in self.inventory.allowed_ids():
             if isinstance(event, CallbackQuery):
                 await event.answer('Нет доступа к семейному каталогу.', show_alert=True)
             else:
                 await message.answer(
                     f'Каталог доступен только семье. Ваш ID: <code>{user.id}</code>.\n'
-                    'Попросите администратора добавить его в FAMILY_IDS.')
+                    'Откройте пригласительную ссылку от родственника и нажмите Start.')
             return
         self.inventory.register(user.id, user.full_name)
         return await handler(event, data)
@@ -99,6 +107,23 @@ def create_router(inventory, family_ids, notifier=None):
     async def menu(message: Message, state: FSMContext):
         await state.clear()
         await message.answer('🧰 Семейные инструменты. Выберите действие.', reply_markup=kb.menu)
+
+    @router.message(Command('invite', 'newinvite'))
+    @router.message(F.text == kb.INVITE)
+    async def invite(message: Message, state: FSMContext):
+        await state.clear()
+        bot_user = await message.bot.get_me()
+        rotate = (message.text or '').split('@')[0] == '/newinvite'
+        token = inventory.invite_token(rotate=rotate)
+        await message.answer(
+            'Отправьте ссылку родственникам. После открытия и нажатия Start '
+            'бот сам добавит их в семью:\n\n'
+            f'https://t.me/{bot_user.username}?start=join_{token}\n\n'
+            'Любой, у кого есть эта ссылка, сможет войти. '
+            '/newinvite — заменить ссылку; уже вступившие сохранят доступ.',
+            reply_markup=kb.menu,
+            link_preview_options={'is_disabled': True},
+        )
 
     @router.message(F.text == kb.HELP)
     @router.message(Command('help'))
@@ -256,7 +281,7 @@ def create_router(inventory, family_ids, notifier=None):
                 if action == 'transfer':
                     if tool['holder_id'] != user_id:
                         raise Conflict('Сначала возьмите инструмент себе.')
-                    members = [m for m in inventory.members(family_ids) if m['id'] != user_id]
+                    members = [m for m in inventory.members(inventory.allowed_ids()) if m['id'] != user_id]
                     if not members:
                         raise Conflict('Пока некому передать. Родственник должен запустить бота.')
                     await call.answer()
@@ -270,7 +295,7 @@ def create_router(inventory, family_ids, notifier=None):
                     await call.message.answer('Где инструмент лежит сейчас? До 120 символов.', reply_markup=kb.cancel)
                 return
             target = int(parts[3]) if action == 'give' else None
-            if action == 'give' and target not in family_ids:
+            if action == 'give' and target not in inventory.allowed_ids():
                 raise Conflict('Получатель не входит в семейный список.')
             inventory.move(tool_id, version, user_id, 'transfer' if action == 'give' else action, holder_id=target)
             notifier.wake.set()
