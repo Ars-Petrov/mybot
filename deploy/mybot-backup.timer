@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily family tools backup
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 Europe/Moscow
+Persistent=true
+Unit=mybot-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -10,6 +10,7 @@ from aiogram.types import Chat, Message, Update, User
 import keyboards as kb
 from handlers import create_router
 from storage import Inventory
+from notifications import Notifier
 
 
 class TelegramStub(BaseSession):
@@ -40,7 +41,8 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         self.session = TelegramStub()
         self.bot = Bot('123456:TEST_TOKEN', session=self.session)
         self.dp = Dispatcher()
-        self.dp.include_router(create_router(self.db, frozenset({1, 2})))
+        self.notifier = Notifier(self.db, frozenset({1, 2}))
+        self.dp.include_router(create_router(self.db, frozenset({1, 2}), self.notifier))
         self.sequence = 0
 
     async def asyncTearDown(self):
@@ -133,6 +135,38 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         await self.send('/cancel')
         await self.send(callback='list:search:1')
         self.assertIn('Поиск устарел', self.output())
+
+    async def test_relative_takes_and_previous_holder_is_notified(self):
+        await self.add_tool()
+        await self.send(callback='take:1:0')
+        await self.send(callback='tool:1', user_id=2)
+        card = self.session.sent[-1].reply_markup
+        self.assertTrue(any(b.callback_data == 'take:1:1' for row in card.inline_keyboard for b in row))
+        await self.send(callback='take:1:1', user_id=2)
+        self.assertEqual(self.db.get(1)['holder_id'], 2)
+        self.assertTrue(self.notifier.wake.is_set())
+        await self.notifier.deliver(self.bot)
+        notification = self.session.sent[-1]
+        self.assertEqual(notification.chat_id, 1)
+        self.assertIn('Член семьи 2', notification.text)
+        self.assertIn('&lt;Перфоратор&gt;', notification.text)
+        self.assertEqual(self.db.pending_notifications(), [])
+
+    async def test_any_member_adds_and_deletes_with_confirmation(self):
+        await self.add_tool()
+        await self.send(callback='take:1:0')
+        await self.send(callback='delete:1:1', user_id=2)
+        self.assertIn('Удалить', self.output())
+        self.assertIsNotNone(self.db.get(1))
+        await self.send(callback='tool:1', user_id=2)  # Cancel confirmation.
+        self.assertIsNotNone(self.db.get(1))
+        await self.send(callback='delete_confirm:1:1', user_id=2)
+        self.assertIsNone(self.db.get(1))
+        await self.send(callback='take:1:1')
+        self.assertIn('Карточка устарела', self.output())
+        for value in [kb.ADD, 'Молоток', '-', 'Дача', '-']:
+            await self.send(value, user_id=2)
+        self.assertEqual(self.db.listing()[1], 1)
 
 
 if __name__ == '__main__':

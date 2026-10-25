@@ -1,0 +1,16 @@
+[Unit]
+Description=Consistent family tools SQLite backup
+
+[Service]
+Type=oneshot
+User=mybot
+Group=mybot
+WorkingDirectory=/srv/mybot
+ExecStart=/srv/mybot/.venv/bin/python /srv/mybot/backup.py --database /srv/mybot/data/tools.sqlite3 --destination /srv/mybot/backups --keep 30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/mybot/backups /srv/mybot/data
+TimeoutStartSec=300

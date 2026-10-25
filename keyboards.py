@@ -25,12 +25,13 @@ def inline(rows):
 def card(tool, user_id):
     prefix = f"{tool['id']}:{tool['version']}"
     rows = []
-    if tool['holder_id'] is None:
+    if tool['holder_id'] != user_id:
         rows.append([('🙋 Взять себе', f'take:{prefix}')])
     elif tool['holder_id'] == user_id:
         rows.append([('🤝 Передать', f'transfer:{prefix}'), ('📦 Вернуть', f'return:{prefix}')])
     if tool['holder_id'] is None or tool['holder_id'] == user_id:
         rows.append([('📍 Изменить место', f'location:{prefix}')])
     rows.append([('📜 История', f"history:{tool['id']}")])
+    rows.append([('🗑 Удалить инструмент', f'delete:{prefix}')])
     rows.append([('🔄 Обновить', f"tool:{tool['id']}")])
     return inline(rows)
