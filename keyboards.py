@@ -36,6 +36,7 @@ def card(tool, user_id):
     if tool['holder_id'] is None or tool['holder_id'] == user_id:
         rows.append([('📍 Положить в локацию', f'put:{prefix}')])
     rows.append([('📜 История', f"history:{tool['id']}")])
+    rows.append([('✏️ Редактировать', f'edit:{prefix}')])
     rows.append([('🗑 Удалить инструмент', f'delete:{prefix}')])
     rows.append([('🔄 Обновить', f"tool:{tool['id']}")])
     return inline(rows)

@@ -20,6 +20,8 @@ class Form(StatesGroup):
     search = State()
     location = State()
     location_name = State()
+    tool_edit = State()
+    location_rename = State()
 
 
 class FamilyAccess(BaseMiddleware):
@@ -114,9 +116,10 @@ def create_router(inventory, family_ids, notifier=None):
         if nav:
             rows.append(nav)
         rows.append([('➕ Добавить локацию', f'newplace:{purpose}:{tool_id}:{version}')])
-        if purpose == 'put':
+        if purpose in {'put', 'edithome'}:
             rows.append([('Отмена', f'tool:{tool_id}')])
-        title = {'browse': 'Локации', 'home': 'Где хранится инструмент?', 'put': 'Куда положить инструмент?'}[purpose]
+        title = {'browse': 'Локации', 'home': 'Где хранится инструмент?', 'put': 'Куда положить инструмент?',
+                 'edithome': 'Новое место возврата'}[purpose]
         await message.answer(f'<b>{title}</b> · страница {page + 1}', reply_markup=kb.inline(rows))
 
     async def show_location_tools(message, place_id, page=0):
@@ -134,8 +137,19 @@ def create_router(inventory, family_ids, notifier=None):
             nav.append(('Далее →', f'loctools:{place_id}:{page + 1}'))
         if nav:
             rows.append(nav)
+        rows.append([('✏️ Переименовать', f"renameplace:{place_id}:{place['version']}")])
         rows.append([('← Локации', 'places:browse:0:0:0')])
         await message.answer(f"📍 <b>{escape(place['name'])}</b> · инструментов: {total}", reply_markup=kb.inline(rows))
+
+    async def save_tool_edit(message, state, tool_id, version, user_id, field, value):
+        try:
+            inventory.edit_tool(tool_id, version, user_id, field, value)
+        except Conflict as error:
+            await message.answer(str(error), reply_markup=kb.menu)
+        else:
+            await message.answer('Изменения сохранены.', reply_markup=kb.menu)
+        await state.clear()
+        await show_card(message, tool_id, user_id)
 
     async def select_home(message, state, place_id):
         await state.update_data(home=place_id)
@@ -244,6 +258,8 @@ def create_router(inventory, family_ids, notifier=None):
         purpose = data.get('place_purpose', 'browse')
         if purpose == 'home':
             await select_home(message, state, place['id'])
+        elif purpose == 'edithome':
+            await save_tool_edit(message, state, data['tool_id'], data['version'], message.from_user.id, 'home', place['id'])
         elif purpose == 'put':
             try:
                 inventory.move(data['tool_id'], data['version'], message.from_user.id, 'put', location_id=place['id'])
@@ -268,6 +284,49 @@ def create_router(inventory, family_ids, notifier=None):
         await state.clear()
         await message.answer('Инструмент добавлен в общее место хранения.', reply_markup=kb.menu)
         await show_card(message, tool_id, message.from_user.id)
+
+    @router.message(Form.tool_edit)
+    async def edit_value(message: Message, state: FSMContext):
+        data = await state.get_data()
+        field = data['edit_field']
+        value = (message.text or '').strip()
+        if field == 'photo':
+            if message.photo:
+                value = message.photo[-1].file_id
+            elif value == '-':
+                value = None
+            else:
+                await message.answer('Пришлите одно фото или «-», чтобы удалить текущее.')
+                return
+        elif field == 'name':
+            if not 1 <= len(value) <= 80:
+                await message.answer('Введите название текстом, от 1 до 80 символов.')
+                return
+        elif field == 'description':
+            if not 1 <= len(value) <= 500:
+                await message.answer('Введите описание до 500 символов или «-», чтобы очистить.')
+                return
+            value = '' if value == '-' else value
+        await save_tool_edit(message, state, data['tool_id'], data['version'], message.from_user.id, field, value)
+
+    @router.message(Form.location_rename)
+    async def rename_value(message: Message, state: FSMContext):
+        value = ' '.join((message.text or '').split())
+        if not 1 <= len(value) <= 120:
+            await message.answer('Введите название локации текстом, от 1 до 120 символов.')
+            return
+        data = await state.get_data()
+        try:
+            affected = inventory.rename_location(data['place_id'], data['place_version'], value, message.from_user.id)
+        except ValueError as error:
+            await message.answer(str(error))
+            return
+        except Conflict as error:
+            await message.answer(str(error), reply_markup=kb.menu)
+        else:
+            await message.answer(f'Локация переименована. Обновлено инструментов: {affected}.', reply_markup=kb.menu)
+        await state.clear()
+        await show_location_tools(message, data['place_id'])
 
     @router.message(Form.search)
     async def search_query(message: Message, state: FSMContext):
@@ -301,6 +360,46 @@ def create_router(inventory, family_ids, notifier=None):
         action = parts[0]
         user_id = call.from_user.id
         try:
+            if action == 'renameplace' and len(parts) == 3:
+                place_id, version = int(parts[1]), int(parts[2])
+                place = inventory.get_location(place_id)
+                if not place or place['version'] != version:
+                    raise Conflict('Локация уже изменена. Откройте её заново.')
+                await state.clear()
+                await state.set_state(Form.location_rename)
+                await state.update_data(place_id=place_id, place_version=version)
+                await call.answer()
+                await call.message.answer(f"Новое название для «{escape(place['name'])}»? До 120 символов.", reply_markup=kb.cancel)
+                return
+            if action in {'edit', 'editfield'} and len(parts) == (3 if action == 'edit' else 4):
+                tool_id, version = int(parts[1]), int(parts[2])
+                tool = inventory.get(tool_id)
+                if not tool or tool['version'] != version:
+                    raise Conflict('Карточка устарела. Откройте инструмент ещё раз.')
+                await state.clear()
+                if action == 'edit':
+                    rows = [[(label, f'editfield:{tool_id}:{version}:{field}')]
+                            for field, label in [('name', 'Название'), ('description', 'Описание'),
+                                                 ('photo', 'Фото'), ('home', 'Место возврата')]]
+                    rows.append([('Отмена', f'tool:{tool_id}')])
+                    await call.answer()
+                    await call.message.answer(f"Что изменить у «{escape(tool['name'])}»?", reply_markup=kb.inline(rows))
+                else:
+                    field = parts[3]
+                    if field not in {'name', 'description', 'photo', 'home'}:
+                        raise ValueError
+                    await call.answer()
+                    if field == 'home':
+                        await call.message.answer('Выберите новое место возврата. Текущее место инструмента останется прежним.', reply_markup=kb.menu)
+                        await show_locations(call.message, 'edithome', tool_id, version)
+                    else:
+                        await state.set_state(Form.tool_edit)
+                        await state.update_data(tool_id=tool_id, version=version, edit_field=field)
+                        prompts = {'name': 'Новое название? До 80 символов.',
+                                   'description': 'Новое описание? До 500 символов; «-», чтобы очистить.',
+                                   'photo': 'Пришлите одно новое фото или «-», чтобы удалить текущее.'}
+                        await call.message.answer(prompts[field], reply_markup=kb.cancel)
+                return
             if action == 'loctools' and len(parts) == 3:
                 place_id, page = int(parts[1]), int(parts[2])
                 if page < 0:
@@ -313,7 +412,7 @@ def create_router(inventory, family_ids, notifier=None):
                 if len(parts) != (4 if action == 'newplace' else 5):
                     raise ValueError
                 purpose, tool_id, version = parts[1], int(parts[2]), int(parts[3])
-                if purpose not in {'browse', 'home', 'put'}:
+                if purpose not in {'browse', 'home', 'put', 'edithome'}:
                     raise ValueError
                 if purpose == 'home' and await state.get_state() != Form.home.state:
                     raise Conflict('Выбор места устарел. Начните добавление инструмента заново.')
@@ -323,6 +422,10 @@ def create_router(inventory, family_ids, notifier=None):
                         raise Conflict('Карточка устарела. Откройте инструмент ещё раз.')
                     if tool['holder_id'] not in {None, user_id}:
                         raise Conflict('Сначала возьмите инструмент себе.')
+                if purpose == 'edithome':
+                    tool = inventory.get(tool_id)
+                    if not tool or tool['version'] != version:
+                        raise Conflict('Карточка устарела. Откройте инструмент ещё раз.')
                 if action == 'newplace':
                     if purpose != 'home':
                         await state.clear()
@@ -346,6 +449,9 @@ def create_router(inventory, family_ids, notifier=None):
                     if purpose == 'home':
                         await call.answer()
                         await select_home(call.message, state, place_id)
+                    elif purpose == 'edithome':
+                        await call.answer()
+                        await save_tool_edit(call.message, state, tool_id, version, user_id, 'home', place_id)
                     elif purpose == 'put':
                         inventory.move(tool_id, version, user_id, 'put', location_id=place_id)
                         await state.clear()

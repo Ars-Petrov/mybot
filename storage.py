@@ -57,8 +57,12 @@ class Inventory:
             db.execute('BEGIN IMMEDIATE')
             if 'deleted_at' not in {row['name'] for row in db.execute('PRAGMA table_info(tools)')}:
                 db.execute('ALTER TABLE tools ADD COLUMN deleted_at TEXT')
-            for name in ('Дом', 'Дача', 'Гараж'):
-                self._ensure_location(db, name)
+            if 'version' not in {row['name'] for row in db.execute('PRAGMA table_info(locations)')}:
+                db.execute('ALTER TABLE locations ADD COLUMN version INTEGER NOT NULL DEFAULT 0')
+            if db.execute("SELECT 1 FROM settings WHERE key='locations_initialized'").fetchone() is None:
+                for name in ('Дом', 'Дача', 'Гараж'):
+                    self._ensure_location(db, name)
+                db.execute("INSERT INTO settings(key,value) VALUES ('locations_initialized','1')")
             # Preserve existing text and history; import legacy places into the picker.
             for row in db.execute('SELECT home, location FROM tools').fetchall():
                 self._ensure_location(db, row['home'])
@@ -140,6 +144,69 @@ class Inventory:
             rows = [dict(row) for row in db.execute('SELECT * FROM locations ORDER BY id')]
             return rows[page * page_size:(page + 1) * page_size], len(rows)
 
+    def rename_location(self, location_id, version, name, actor_id):
+        name = ' '.join(name.split())
+        if not 1 <= len(name) <= 120:
+            raise ValueError('Введите название локации от 1 до 120 символов.')
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            place = db.execute('SELECT * FROM locations WHERE id=?', (location_id,)).fetchone()
+            if not place or place['version'] != version:
+                raise Conflict('Локация уже изменена. Откройте её заново.')
+            duplicate = db.execute('SELECT id FROM locations WHERE name_key=? AND id<>?',
+                                   (name.casefold(), location_id)).fetchone()
+            if duplicate:
+                raise ValueError('Локация с таким названием уже существует. Выберите другое.')
+            if name == place['name']:
+                return 0
+            db.execute('UPDATE locations SET name=?,name_key=?,version=version+1 WHERE id=?',
+                       (name, name.casefold(), location_id))
+            affected = 0
+            for tool in db.execute('SELECT * FROM tools').fetchall():
+                current_matches = ' '.join(tool['location'].split()).casefold() == place['name_key']
+                home_matches = ' '.join(tool['home'].split()).casefold() == place['name_key']
+                if not (current_matches or home_matches):
+                    continue
+                location = name if current_matches else tool['location']
+                home = name if home_matches else tool['home']
+                db.execute('UPDATE tools SET location=?,home=?,version=version+1 WHERE id=?',
+                           (location, home, tool['id']))
+                if tool['deleted_at'] is None:
+                    affected += 1
+                    db.execute('INSERT INTO movements(tool_id,actor_id,action,holder_id,location) VALUES (?,?,?,?,?)',
+                               (tool['id'], actor_id, 'Локация переименована', tool['holder_id'], location))
+            return affected
+
+    def edit_tool(self, tool_id, version, actor_id, field, value):
+        labels = {'name': 'Изменено название', 'description': 'Изменено описание',
+                  'photo': 'Изменено фото', 'home': 'Изменено место возврата'}
+        if field not in labels:
+            raise ValueError('Неизвестное поле инструмента.')
+        if field == 'name':
+            value = (value or '').strip()
+            if not 1 <= len(value) <= 80:
+                raise ValueError('Введите название от 1 до 80 символов.')
+        elif field == 'description':
+            value = (value or '').strip()
+            if len(value) > 500:
+                raise ValueError('Описание должно быть не длиннее 500 символов.')
+        elif field == 'photo' and value is not None and (not isinstance(value, str) or not value):
+            raise ValueError('Пришлите фото или удалите текущее.')
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            tool = db.execute('SELECT * FROM tools WHERE id=?', (tool_id,)).fetchone()
+            if not tool or tool['deleted_at'] is not None or tool['version'] != version:
+                raise Conflict('Карточка устарела. Откройте инструмент ещё раз.')
+            if field == 'home':
+                place = db.execute('SELECT * FROM locations WHERE id=?', (value,)).fetchone()
+                if place is None:
+                    raise Conflict('Локация не найдена. Выберите её заново.')
+                value = place['name']
+            # Column name comes exclusively from the fixed field allowlist above.
+            db.execute(f'UPDATE tools SET {field}=?,version=version+1 WHERE id=?', (value, tool_id))
+            db.execute('INSERT INTO movements(tool_id,actor_id,action,holder_id,location) VALUES (?,?,?,?,?)',
+                       (tool_id, actor_id, labels[field], tool['holder_id'], tool['location']))
+
     def add(self, name, description, home, photo, actor_id):
         with self.connect() as db:
             if isinstance(home, int):
@@ -209,7 +276,7 @@ class Inventory:
                     if row['holder_id'] != actor_id or holder_id == actor_id:
                         raise Conflict('Передать можно только инструмент, который сейчас у вас.')
                     if not db.execute('SELECT 1 FROM members WHERE id=?', (holder_id,)).fetchone():
-                        raise Conflict('Родственник ещё не запустил бота.')
+                        raise Conflict('Участник ещё не запустил бота.')
                     location, label = row['location'], 'Передан'
                 elif action == 'location':
                     if not location or not location.strip() or len(location) > 120:
