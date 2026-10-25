@@ -11,7 +11,7 @@
 ```bash
 sudo apt update
 sudo apt install python3 python3-venv git openssh-server
-sudo git clone --branch codex/tool-locations https://github.com/Ars-Petrov/mybot /srv/mybot
+sudo git clone --branch codex/edit-tools-locations https://github.com/Ars-Petrov/mybot /srv/mybot
 sudo useradd --system --home-dir /srv/mybot --shell /bin/bash mybot
 sudo chown -R mybot:mybot /srv/mybot
 sudo -u mybot mkdir -p /srv/mybot/data /srv/mybot/backups
@@ -23,7 +23,7 @@ sudo nano /srv/mybot/.env
 ```
 
 Если пользователь или папка уже существуют, используйте их вместо повторного создания.
-После слияния изменений можно клонировать основную ветку вместо `codex/tool-locations`.
+После слияния изменений можно клонировать основную ветку вместо `codex/edit-tools-locations`.
 В `.env` заполните `BOT_TOKEN`; `FAMILY_IDS` можно оставить пустым. Оставьте `DATABASE_PATH=data/tools.sqlite3`
 для приложенных служб. Для другой базы исправьте путь и в службе резервного копирования.
 После запуска создайте первую пригласительную ссылку командой ниже. Участники

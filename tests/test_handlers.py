@@ -284,6 +284,81 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         for word in ['семей', 'семь', 'родствен']:
             self.assertNotIn(word, bodies)
 
+    async def test_other_participant_edits_name_description_and_photo(self):
+        await self.add_tool(photo=True)
+        await self.send(callback='take:1:0')
+        await self.send(callback='edit:1:1', user_id=2)
+        self.assertIn('Что изменить', self.session.sent[-1].text)
+        await self.send(callback='editfield:1:1:name', user_id=2)
+        await self.send('Новое <имя>', user_id=2)
+        self.assertEqual(self.db.get(1)['name'], 'Новое <имя>')
+        self.assertIn('Новое &lt;имя&gt;', self.session.sent[-1].text)
+        await self.send(callback='editfield:1:2:description', user_id=2)
+        await self.send('Описание модели', user_id=2)
+        self.assertEqual(self.db.get(1)['description'], 'Описание модели')
+        await self.send(callback='editfield:1:3:description', user_id=2)
+        await self.send('-', user_id=2)
+        self.assertEqual(self.db.get(1)['description'], '')
+        await self.send(callback='editfield:1:4:photo', user_id=2)
+        await self.send('не фото', user_id=2)
+        self.assertEqual(self.db.get(1)['version'], 4)
+        await self.send(photo=True, user_id=2)
+        await self.send(callback='editfield:1:5:photo', user_id=2)
+        await self.send('-', user_id=2)
+        self.assertIsNone(self.db.get(1)['photo'])
+        self.assertEqual(self.db.get(1)['holder_id'], 1)
+
+    async def test_edit_return_place_existing_and_new_does_not_move_tool(self):
+        await self.add_tool()
+        await self.send(callback='editfield:1:0:home', user_id=2)
+        await self.send(callback='loc:edithome:1:0:2', user_id=2)
+        self.assertEqual(self.db.get(1)['home'], 'Дача')
+        self.assertEqual(self.db.get(1)['location'], 'Гараж')
+        await self.send(callback='editfield:1:1:home')
+        await self.send(callback='newplace:edithome:1:1')
+        await self.send('Мастерская')
+        self.assertEqual(self.db.get(1)['home'], 'Мастерская')
+        self.assertEqual(self.db.get(1)['location'], 'Гараж')
+
+    async def test_edit_cancel_invalid_input_and_concurrent_move(self):
+        await self.add_tool()
+        await self.send(callback='editfield:1:0:name')
+        await self.send('/cancel')
+        self.assertEqual(self.db.get(1)['version'], 0)
+        await self.send(callback='editfield:1:0:name')
+        await self.send(photo=True)
+        self.assertIn('Введите название', self.session.sent[-1].text)
+        await self.send(callback='take:1:0', user_id=2)
+        await self.send('Устаревшее имя')
+        self.assertIn('Карточка устарела', self.output())
+        self.assertEqual(self.db.get(1)['name'], '<Перфоратор>')
+        self.assertEqual(self.db.get(1)['holder_id'], 2)
+
+    async def test_any_participant_renames_location_and_duplicate_can_be_corrected(self):
+        await self.add_tool()
+        await self.send(callback='loc:browse:0:0:3', user_id=2)
+        markup = self.session.sent[-1].reply_markup
+        self.assertTrue(any(button.callback_data == 'renameplace:3:0' for row in markup.inline_keyboard for button in row))
+        await self.send(callback='renameplace:3:0', user_id=2)
+        await self.send('Дом', user_id=2)
+        self.assertIn('уже существует', self.session.sent[-1].text)
+        self.assertEqual(self.db.get_location(3)['name'], 'Гараж')
+        await self.send('Мастерская <А>', user_id=2)
+        self.assertEqual(self.db.get(1)['home'], 'Мастерская <А>')
+        self.assertEqual(self.db.get(1)['location'], 'Мастерская <А>')
+        self.assertIn('Мастерская &lt;А&gt;', self.session.sent[-1].text)
+        await self.send(callback='renameplace:3:0')
+        self.assertIn('Локация уже изменена', self.session.sent[-1].text)
+
+    async def test_location_rename_cancel_and_edit_access_denied(self):
+        await self.send(callback='renameplace:1:0')
+        await self.send('/cancel')
+        self.assertEqual(self.db.get_location(1)['name'], 'Дом')
+        await self.send(callback='renameplace:1:0', user_id=99)
+        await self.send(callback='editfield:1:0:name', user_id=99)
+        self.assertIn('Нет доступа', self.session.sent[-1].text)
+        self.assertEqual(self.db.get_location(1)['version'], 0)
+
 
 if __name__ == '__main__':
     unittest.main()
